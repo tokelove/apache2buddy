@@ -135,8 +135,20 @@ If no options are specified, the basic tests will be run.
 	-K, --no-ok		Do not show OK messages.
 	-W, --nowarn		Do not show warning messages.
 	-L, --light-term	Show colours for a light background terminal.
-	-r, --report		Implies -HNWK or --noinfo --nowarn --no-ok --noheader
-	-P, --no-check-pid	DON'T Check the Parent Pid File Size (only use if desperate for more info, results may be skewed)
+	-r, --report		Implies -HNWK or --noinfo --nowarn --no-ok --noheader --skip-maxclients --skip-php-fatal --skip-updates
+	-P, --no-check-pid	DON'T Check the Parent Pid File Size (only use if desperate for more info, results may be skewed).
+	    --skip-maxclients	Skip checking in maxclients was hit recently, can be slow, especialy if you have large log files.
+            --skip-php-fatal    Skip checking for PHP FATAL errors, can be slow, especialy if you have large log files.
+            --skip-updates      Skip checking for package updates, can be slow or problematic, causing the script to hang.
+
+
+Key:
+
+    [ -- ]  = Information
+    [ @@ ]  = Advisory
+    [ >> ]  = Warning
+    [ !! ]  = Critical
+
 
 END_USAGE
 
@@ -182,6 +194,18 @@ our $NOHEADER = 0;
 # by default, check pid size 
 our $NOCHKPID = 0;
 
+# add 'skip section' options...
+
+# by default, do not skip maxclients check
+our $SKIPMAXCLIENTS = 0;
+
+# by default, do not skip php fatal errors check 
+our $SKIPPHPFATAL = 0;
+
+# by default, do not skip updates check 
+our $SKIPUPDATES = 0;
+
+
 # grab the command line arguments
 GetOptions(
 	'help|h' => \$help,
@@ -195,6 +219,9 @@ GetOptions(
 	'no-ok|K' => \$NOOK,
 	'noheader|H' => \$NOHEADER,
 	'no-check-pid|P' => \$NOCHKPID,
+	'skip-maxclients' => \$SKIPMAXCLIENTS,
+	'skip-php-fatal' => \$SKIPPHPFATAL,
+	'skip-updates' => \$SKIPUPDATES,
 	'nonews' => \$NONEWS
 );
 
@@ -215,6 +242,9 @@ if ( $REPORT ) {
 	$NONEWS = 1;
 	$NOWARN = 1;
 	$NOOK = 1;
+	$SKIPMAXCLIENTS = 1;
+	$SKIPPHPFATAL = 1;
+	$SKIPUPDATES = 1;
 }
 
 # Declare constants such as ANSI COLOR schemes.
@@ -261,6 +291,118 @@ if ( ! $NOCOLOR ) {
 	$UNDERLINE = ""; # SUPPRESS COLORS
 }
 
+sub get_os_platform_older {
+	my $raw_platform = `python -c 'import platform ; print (platform.dist())'`;
+	# ('CentOS Linux', '7.3.1611', 'Core')
+	$raw_platform =~ s/[()']//g;
+	my @platform = split(", ", $raw_platform);
+	my $distro =  @platform[0];
+	my $version = @platform[1];
+	my $codename = @platform[2];
+	return ($distro, $version, $codename);
+}
+
+sub get_os_platform {
+	my $raw_platform = `python -c 'import platform ; print (platform.linux_distribution())'`;
+	# ('CentOS Linux', '7.3.1611', 'Core')
+	$raw_platform =~ s/[()']//g;
+	my @platform = split(", ", $raw_platform);
+	my $distro =  @platform[0];
+	my $version = @platform[1];
+	my $codename = @platform[2];
+	return ($distro, $version, $codename);
+}
+
+sub check_os_support {
+	my ($distro, $version, $codename) = @_;
+	# Please dont make pull requests to add your distro to this list, that doesnt make it supported.
+	# The following distros are what I use to test and deploy apache2buddy and only these distro's are supported.
+	my @supported_os_list = ('Ubuntu',
+				'ubuntu',
+				'Debian',
+				'debian',
+				'Red Hat Enterprise Linux',
+				'Red Hat Enterprise Linux Server',
+				'redhat',
+				'CentOS Linux',
+				'CentOS',
+				'centos',
+				'Scientific Linux');
+	my %sol = map { $_ => 1 } @supported_os_list;
+	
+	my @ubuntu_os_list = ('Ubuntu', 'ubuntu');
+	my %uol = map { $_ => 1 } @ubuntu_os_list;
+	
+	my @debian_os_list = ('Debian', 'debian');
+	my %dol = map { $_ => 1 } @debian_os_list;
+	
+	my @redhat_os_list = ('Red Hat Enterprise Linux', 'redhat', 'CentOS Linux', 'Scientific Linux');
+	my %rol = map { $_ => 1 } @redhat_os_list;
+
+	# https://wiki.debian.org/DebianReleases
+	my @debian_supported_versions = ('8','9');
+	my %dsv = map { $_ => 1 } @debian_supported_versions;
+
+	# https://www.ubuntu.com/info/release-end-of-life
+	my @ubuntu_supported_versions = ('14.04','16.04');
+	my %usv = map { $_ => 1 } @ubuntu_supported_versions;
+
+	if (exists($sol{$distro})) {
+		if ( ! $NOOK ) { show_ok_box(); print "This distro is supported by apache2buddy.pl.\n" }	
+		# If the OS is deemed unsupported, we still run, but you may get errors, however any github issues raised will not
+		# be entertained for unsupported or EOL OS releaases.
+		if (exists($dol{$distro})) {
+			my @debian_version = split('\.', $version);
+                        if ( $VERBOSE ) {
+                                foreach my $item (@debian_version) {
+                                        print "VERBOSE: ".  $item . "\n";
+                                }
+                        }
+			my $major_debian_version = $debian_version[0];
+			if (exists($dsv{$major_debian_version})) {
+				if ( ! $NOOK ) { show_ok_box(); print "This distro version is supported by apache2buddy.pl.\n" }
+			} else {
+				show_crit_box(); print "${RED}This distro version (${CYAN}$version${ENDC}${RED}) is not supported by apache2buddy.pl.${ENDC}\n";
+				# list supported debian versions
+				if ( ! $NOINFO ) { show_advisory_box(); print "${YELLOW}Supported Debian versions:${ENDC} '${CYAN}" . join("${ENDC}', '${CYAN}", @debian_supported_versions) . "${ENDC}'.\n"}
+				exit;
+			}
+		} elsif  (exists($uol{$distro})) {
+			if (exists($usv{$version})) {
+				if ( ! $NOOK ) { show_ok_box(); print "This distro version is supported by apache2buddy.pl.\n" }
+			} else {
+				show_crit_box(); print "${RED}This distro version (${CYAN}$version${ENDC}${RED}) is not supported by apache2buddy.pl.${ENDC}\n";
+				# list supported debian versions
+				if ( ! $NOINFO ) { show_advisory_box(); print "${YELLOW}Supported Ubuntu (LTS ONLY) versions:${ENDC} '${CYAN}" . join("${ENDC}', '${CYAN}", @ubuntu_supported_versions) . "${ENDC}'.\n"}
+				exit;
+			}
+		} elsif (exists($rol{$distro})) {
+			# for red hat versions is not so clinical regarding the specific versions, however we need to be mindful of EOL versions eg RHEL 3, 4, 5
+			# get mavjor version from version string. note that redhatm centos and scientifc are al rebuilds of the same sources, variables therefore
+			# use the generic 'redhat' reference.
+			if ( $VERBOSE ) { print "VERBOSE -> RedHat Version: ". $version . "\n"}
+			my @redhat_version = split('\.', $version);
+			if ( $VERBOSE ) {
+				foreach my $item (@redhat_version) {
+					print "VERBOSE: ".  $item . "\n";
+				}
+       			}
+			my $major_redhat_version = $redhat_version[0];
+			if ( $VERBOSE ) { print "VERBOSE -> Major RedHat Version Detected ". $major_redhat_version . "\n"}
+			if ($major_redhat_version lt 6 ) {
+				show_crit_box(); print "${RED}This distro version (${CYAN}$version${ENDC}${RED}) is not supported by apache2buddy.pl.${ENDC}\n";
+				exit;
+			} else {
+				if ( ! $NOOK ) { show_ok_box(); print "This distro version is supported by apache2buddy.pl.\n" }
+			}
+		}
+	} else {
+		show_crit_box(); print "${RED}This distro is not supported by apache2buddy.pl.${ENDC}\n";
+		# list supported OS distros
+		if ( ! $NOINFO ) { show_advisory_box(); print "${YELLOW}Supported Distro's:${ENDC} '${CYAN}" . join("${ENDC}', '${CYAN}", @supported_os_list) . "${ENDC}'.\n"}
+		exit;
+       }
+}
 
 sub systemcheck_large_logs {
 	my ($logdir) = @_;
@@ -579,7 +721,7 @@ sub find_master_value {
 		$result = "CONFIG NOT FOUND";
 	}
 
-	print "VERBOSE: $result " if $main::VERBOSE;
+	print "VERBOSE: $result \n" if $main::VERBOSE;
 	# Ubuntu does not store the Apache user, group, or pidfile definitions 
 	# in the apache2.conf file. instead, variables are in the configuration 
 	# file and the real values are in /etc/apache2/envvars. this is a 
@@ -696,19 +838,19 @@ sub test_process {
 	our @output;
 	if ( $process_name eq '/usr/sbin/httpd' ) {
 		@output = `LANGUAGE=en_GB.UTF-8 $process_name -V 2>&1 | grep "Server version"`;
-		print "VERBOSE: First line of output from \"$process_name -V\": $output[0]" if $main::VERBOSE;
+		print "VERBOSE: First line of output from \"$process_name -V\": $output[0]\n" if $main::VERBOSE;
 	} elsif ( $process_name eq '/usr/sbin/httpd.worker' ) {
 		# Handle Worker processes better
 		# BUGFIX, first identified by C. Piper Balta 
 		@output = `LANGUAGE=en_GB.UTF-8 $process_name -V 2>&1 | grep "Server version"`;
-		print "VERBOSE: First line of output from \"$process_name -V\": $output[0]" if $main::VERBOSE;
+		print "VERBOSE: First line of output from \"$process_name -V\": $output[0]\n" if $main::VERBOSE;
 	} elsif ( $process_name eq '/usr/sbin/apache2' ) {
 		@output = `LANGUAGE=en_GB.UTF-8 /usr/sbin/apache2ctl -V 2>&1 | grep "Server version"`;
-		print "VERBOSE: First line of output from \"/usr/sbin/apache2ctl -V\": $output[0]" if $main::VERBOSE;
+		print "VERBOSE: First line of output from \"/usr/sbin/apache2ctl -V\": $output[0]\n" if $main::VERBOSE;
 	} elsif ( $process_name eq '/usr/local/apache/bin/httpd' ) {
 		if ( ! $NOWARN ) { show_warn_box(); print "${RED}Apache seems to have been installed from source, its technically unsupported, we may get errors${ENDC}\n" }
 		@output = `LANGUAGE=en_GB.UTF-8 $process_name -V 2>&1 | grep "Server version"`;
-		print "VERBOSE: First line of output from \"/usr/local/apache/bin/httpd -V\": $output[0]" if $main::VERBOSE;
+		print "VERBOSE: First line of output from \"/usr/local/apache/bin/httpd -V\": $output[0]\n" if $main::VERBOSE;
 	} else {
 		# this catchall should cover all other possibilities, such as
 		# nginx, varnish, etc. 
@@ -872,9 +1014,9 @@ sub get_apache_model {
         } else {
                 $model = `apachectl -M 2>&1 | egrep "worker|prefork|event|itk"`;
                 if ($VERBOSE) { print "VERBOSE: $model" }
-                if ($VERBOSE) { print "VERBOSE: ITK DETECTTOR STARTED\n" }
+                if ($VERBOSE) { print "VERBOSE: ITK DETECTOR STARTED\n" }
                 itk_detect($model);
-                if ($VERBOSE) { print "VERBOSE: ITK DETECTTOR PASSED\n" }
+                if ($VERBOSE) { print "VERBOSE: ITK DETECTOR PASSED\n" }
                 chomp($model);
                 if ($VERBOSE) { print "VERBOSE: $model\n" }
                 if ($VERBOSE) { print "VERBOSE: REGEX Filter started.\n" }
@@ -921,6 +1063,7 @@ sub get_apache_uptime {
 	my $uptime = `ps -eo \"\%p \%t\" | grep $pid | grep -v grep | awk \'{ print \$2 }\'`;
 	chomp($uptime);
 
+	print "VERBOSE: PID passed to uptime function: $pid\n" if $main::VERBOSE;
 	print "VERBOSE: Raw uptime: $uptime\n" if $main::VERBOSE;
 
 	# check to see if we've been running for multiple days
@@ -964,11 +1107,35 @@ sub get_php_setting {
 
 	# this will return an array with all of the local and global PHP 
 	# settings
-	my @php_config_array = `php -r "phpinfo(4);"`;
+	
+	# code to address bug raised in issue #197 (cli memory limits on debian / ubuntu)
+	# sanity check if we are using cli or apache 
+	my $config = `php -r "phpinfo(1);" | grep -i config | grep -i loaded`;
+	chomp ($config);
+	if ($VERBOSE) { print "VERBOSE: PHP: $config\n" }
+
+	if ( $config =~ /cli/ ) {
+		if ($VERBOSE) { print "VERBOSE: PHP: Attempting to find real apache php.ini file...\n" }
+		# try to find the apache2 one
+		if ( -f "/etc/php/7.0/apache2/php.ini") {
+			our $real_config = "/etc/php/7.0/apache2/php.ini";
+		} elsif ( -f "/etc/php5/apache2/php.ini" ) {
+			our $real_config = "/etc/php5/apache2/php.ini";
+		} elsif ( -f "/etc/php/7.0/fpm/php.ini") {
+			our $real_config = "/etc/php/7.0/fpm/php.ini";
+		}
+
+		our $real_config;
+		if ($VERBOSE) { print "VERBOSE: PHP: Real apache php.ini file is $real_config, using that...\n" }
+		our @php_config_array = `php -c $real_config -r "phpinfo(4);"`;
+	} else {
+		our @php_config_array = `php -r "phpinfo(4);"`;
+	}
 
 	my @results;
 
 	# search the array for our desired setting
+	our @php_config_array;
 	foreach (@php_config_array) {
 		chomp($_);
 		if ( $_ =~ m/^\s*$element\s*/ ) {
@@ -1282,8 +1449,10 @@ sub preflight_checks {
 	my $check = `which php`;
 	chomp ($check);
 	if ( $check !~ m/.*\/php/ ) {
-		show_advisory_box();
-		print "${YELLOW}Unable to locate the PHP binary. PHP specific checks will be skipped.${ENDC}\n";
+		if ( ! $NOWARN ) {
+			show_advisory_box();
+			print "${YELLOW}Unable to locate the PHP binary. PHP specific checks will be skipped.${ENDC}\n";
+		}
 		our $PHP = 0;
 		my $path = `echo \$PATH`;
 		chomp($path);
@@ -1322,7 +1491,23 @@ sub preflight_checks {
                 if ( ! $NOOK ) { show_ok_box(); print "The utility 'apachectl' exists and is available for use: ${CYAN}$apachectl${ENDC}\n" }
         }
 
+	# check 3.2 
+	# Check for python (new in Debian 9  as it doesnt come with it out of the box)
+	our $python = `which python`;
+	chomp($python);
+
+
+	if ( $python !~ m/.*\/python/ ) {
+		show_crit_box(); 
+		print "Unable to locate the python binary. This script requires python to determine the Operating and Version.\n";
+		show_info_box(); print "${YELLOW}To fix this make sure the python package is installed.${ENDC}\n";
+		exit;
+	} else {
+		if ( ! $NOOK ) { show_ok_box(); print "The 'python' binary exists and is available for use: ${CYAN}$python${ENDC}\n" }
+	}
+
 	
+
 	# Check 4
 	# Check for valid port
 	if ( $port < 0 || $port > 65534 ) {
@@ -1336,117 +1521,35 @@ sub preflight_checks {
 	
 	# Check 5
 	# Get OS Name and Version
-	our $os_release;
-	our $os_name = '';
 	if ( ! $NOINFO ) { show_info_box(); print "We are attempting to discover the operating system type and version number ...\n" }
-	# in traditional style we go for the obvious first and check if its Red Hat or CentOS
-	if ( -f "/etc/redhat-release" ) {
-	        $os_name = `cat /etc/redhat-release 2>&1 | head -1 | awk '{ print \$1 }'`;
-	        chomp ($os_name);
-
-	        if ( $os_name eq "CentOS" ) {
-		        $os_release = `cat /etc/redhat-release 2>&1 | head -1 | awk '{ print \$3 }'`;
-       		 } elsif ( $os_name  eq "Red" ) {
-	        	$os_name = `cat /etc/redhat-release 2>&1 | head -1 | awk '{ print \$1 " " \$2 " " \$3 " " \$4 }'`;
-                	chomp ($os_name);
-                	$os_release = `cat /etc/redhat-release 2>&1 | head -1 | awk '{ print \$7 }'`;
-       		 } elsif ( $os_name  eq "Scientific" ) {
-	        	$os_name = `cat /etc/redhat-release 2>&1 | head -1 | awk '{ print \$1 " " \$2 }'`;
-                	chomp ($os_name);
-                	$os_release = `cat /etc/redhat-release 2>&1 | head -1 | awk '{ print \$3 }'`;
-        	} else {
-			show_crit_box();
-	               	print ("Either we couldnt get the OS name, or its not a supported distro.\n");
-			exit;
-        	}
-	}
-
-	# if theres no /etc/redhat release check if its Ubuntu...
-        if ( $os_name eq '' ) {
-	        # then we have to assume its either debian or ubuntu ...
-      	        $os_name = `LANGUAGE=en_GB.UTF-8 lsb_release -a 2>&1 | grep "Distributor ID:" | awk '{ \$1=\$2=""; print }'`;
-             	chomp ($os_name);
-                # strip the leading spaces
-                $os_name =~ s/\s*(.*)\s*/$1/;
-                $os_release = `LANGUAGE=en_GB.UTF-8 sb_release -a 2>&1 | grep "Release:" | awk '{ \$1=""; print }'`;
-                # strip the leading spaces
-                $os_release =~ s/\s*(.*)\s*/$1/;
-       	}
-
-	## Or debian ...
-	if ( $os_name eq '' ) {
-		if ( -f "/etc/issue" ) {
-			$os_name = `cat /etc/issue | head -1 | awk '{ print \$1 }'`;
-             		chomp ($os_name);
-			print $os_name."\n";
-			if ( $os_name eq "Debian") {
-				$os_release = `cat /etc/debian_version`;
-				chomp($os_release);
-				$os_release =~ s/(^.{3}).*$/$1/; 
-			}
+	my ($distro, $version, $codename) = get_os_platform();
+	if ( $distro ) { 
+		chomp($distro);
+		chomp($version);
+		chomp($codename);
+		if ( ! $NOINFO ) { show_info_box(); print "Distro: ${CYAN}" . $distro . "${ENDC}\n"}	
+		if ( ! $NOINFO ) { show_info_box(); print "Version: ${CYAN}" . $version . "${ENDC}\n"}	
+		if ( ! $NOINFO ) { show_info_box(); print "Codename: ${CYAN}" . $codename . "${ENDC}\n"}	
+		check_os_support($distro, $version, $codename);
+	} else {
+		# fallback when python fails to deliver - eg on CentOS5 which is EOL anyway, we get:
+		# Traceback (most recent call last):
+		#   File "<string>", line 1, in ?
+		#   AttributeError: 'module' object has no attribute 'linux_distribution'
+		#
+		# This is dues to Python 2.4.3 being used, which is too old.
+		if ( ! $NOINFO ) { print "${YELLOW}Couldnt determine OS version as your python version is too old, trying older python code...${ENDC}\n" }
+		my ($distro, $version, $codename) = get_os_platform_older();
+		if ( $distro ) { 
+			chomp($distro);
+			chomp($version);
+			chomp($codename);
+			if ( ! $NOINFO ) { show_info_box(); print "Distro: ${CYAN}" . $distro . "${ENDC}\n"}	
+			if ( ! $NOINFO ) { show_info_box(); print "Version: ${CYAN}" . $version . "${ENDC}\n"}	
+			if ( ! $NOINFO ) { show_info_box(); print "Codename: ${CYAN}" . $codename . "${ENDC}\n"}	
+			check_os_support($distro, $version, $codename);
 		}
-	}	
-	
-	## or some other unsupported distro ...
-	if ( $os_name eq '' ) {
-		show_crit_box();
-		print ("Either we couldnt get the OS name, or its not a supported distro.\n");
-		exit;
-        }
-       	chomp ($os_release);
-	if ( $os_release  eq "release" ) {
-		# capture RHEL / CENTOS 7 first as I've not coded it up to support that yet, and the wording means that column 3 on CentOS 7 is the word "release" 
-		# shift one more field along in the /etc/redhat-release file to get the actual version number
-	        $os_release = `cat /etc/redhat-release 2>&1 | head -1 | awk '{ print \$4 }'`;
-      		chomp ($os_release);
-		$os_release =~ s/(^.{3}).*$/$1/; 
-	}
- 		
-	if ( ! $NOINFO ) { show_info_box();  print "OS Name: ${CYAN}$os_name${ENDC}\n" }
-	if ( ! $NOINFO ) { show_info_box();  print "OS Release: ${CYAN}$os_release${ENDC}\n" }
-
-	# If its unsupported or end of life, continue, but complain loudly.
-	if ( $os_name eq "Red Hat Enterprise Linux" or $os_name eq "CentOS" ) {
-		# RedHat / CentOS 4 is currenly End of Life as of this writing.
-		if ($VERBOSE) { print "VERBOSE: $os_release\n" }
-		if ( $os_release <= 5 ) {
-			if ( ! $NOWARN ) { show_warn_box(); print "${RED}$os_name $os_release is now end of life, its technically unsupported, we may get errors${ENDC}.\n" }
-		} elsif ($os_release <= 5.11 ) {
-			 if ( ! $NOWARN ) { show_warn_box(); print "${YELLOW}Apache2buddy is dropping support for $os_name $os_release in March 2017${ENDC}.\n" }
-		} else {
-			 if ( ! $NOOK ) { show_ok_box(); print "Apache2buddy supports this OS Release/Version.\n" }
-		}
-	} elsif ( $os_name eq "Ubuntu" ) {
-		if ($VERBOSE) { print "VERBOSE: $os_release\n" }
-                # This code section is completely changing so that I only need to add/remove the LTS versions as they EOL
-		unless  ( $os_release == "12.04" or $os_release == "14.04" or $os_release == "16.04") {
-			# https://wiki.ubuntu.com/Releases
-			if ( ! $NOWARN ) {
-				show_warn_box();
-				print $os_name." ".$os_release." is not supported, we may get errors.";
-				print ".\n";
-			}
-		} else {
-			if ( ! $NOOK ) { show_ok_box(); print "The operating system is supported.\n" }
-		}
-	} elsif ( $os_name eq "Debian" ) {
-		if ($VERBOSE) { print "VERBOSE: $os_release\n" }
-		if ( $os_release <= 6.0 ) {
-			# as of current writing, 6.0 (Squeeze) is the latest EOL version of Debian
-			# https://wiki.debian.org/DebianReleases
-			if ( ! $NOWARN ) {
-				show_warn_box();
-				print $os_name." ".$os_release." is now end of life, its technically unsupported, we may get errors";
-				print ".\n";
-			}
-		} else {
-			if ( ! $NOOK ) {
-				show_ok_box;
-				print "The operating system is supported.\n"
-			}
-		}
-		
-	}
+	}		 
 
 	# get our hostname
 	our $servername = get_hostname();
@@ -1467,7 +1570,9 @@ sub preflight_checks {
 	print "VERBOSE: PID is ".$pid."\n" if $VERBOSE;
 	
 	if ( $pid eq 0 ) {
-		show_warn_box; print "${YELLOW}Nothing seems to be listening on port $port.${ENDC} Falling back to process list...\n";
+		if ( ! $NOWARN ) {
+			show_warn_box; print "${YELLOW}Nothing seems to be listening on port $port.${ENDC} Falling back to process list...\n";
+		}
 		my @process_info = split(' ', `ps -C 'httpd httpd.worker apache apache2' -f | grep '^root'`);
 		$pid = $process_info[1];
 		if ( not $pid ) {
@@ -1532,16 +1637,8 @@ sub preflight_checks {
 	
 
 	# Check 8
-	# determine the Apache uptime
-	our @apache_uptime = get_apache_uptime($pid);
-	
-	if ( ! $NOINFO ) { show_info_box(); print "Apache has been running ${CYAN}$apache_uptime[0]${ENDC}d ${CYAN}$apache_uptime[1]${ENDC}h ${CYAN}$apache_uptime[2]${ENDC}m ${CYAN}$apache_uptime[3]${ENDC}s.\n" }
-	if ( $apache_uptime[0] == "0" ) { 
-		if ( ! $NOWARN ) { 
-			show_crit_box(); print "${RED}*** LOW UPTIME ***${ENDC}.\n"; 
-			show_advisory_box(); print "${YELLOW}The following recommendations may be misleading - apache has been restarted within the last 24 hours.${ENDC}\n";
-		}
-	}
+	# Due to logic error, moved this check to 13.2
+	# Check apache uptime needs parent PID not a child pid.
 
 	# Check 9
 	# find the apache root	
@@ -1617,6 +1714,13 @@ sub preflight_checks {
 		# for example what we need to do is first check if the path is a relative path or absolute path.
 		# If it is an absolute path, lets check that first, which will cut out a lot of unnescesary code, 
 		# otherwise we can start guessing based on common relative paths.
+		#  Fix for Issue #222 strip any quotes from returned string
+		#  "/var/run/httpd.pid" becomes /var/run/httpd.pid
+		if ($VERBOSE) { print "VERBOSE: Stripping any quotes from string ...\n" }
+		if ($VERBOSE) { print "VERBOSE: BEFORE ($pidfile_cfv).\n" }
+		$pidfile_cfv =~ s/^"(.*)"$/$1/;
+		$pidfile_cfv =~ s/^'(.*)'$/$1/;
+		if ($VERBOSE) { print "VERBOSE: AFTER ($pidfile_cfv).\n" }
 		if ( -f $pidfile_cfv ) {
 			our $pidfile =$pidfile_cfv;
 		} else {
@@ -1634,15 +1738,28 @@ sub preflight_checks {
 				our $pidfile = "/var/run/apache2/apache2.pid";
 			} elsif ($pidfile_cfv eq "/var/run/apache2\$SUFFIX.pid") {
 				our $pidfile = "/var/run/apache2.pid";
+			} elsif ($pidfile_cfv eq "/var/run/apache2\$SUFFIX/apache2.pid") {
+				our $pidfile = "/var/run/apache2/apache2.pid";
 			} else {
-				# CentOS7 always returns CONFIG NOT FOUND, but we know the PID exists.
-				our $pidguess = "/var/run/httpd/httpd.pid";
-				if ( -f  $pidguess ) {
-					our $pidfile = $pidguess;
-				} else {
-					show_crit_box; print "${RED}Unable to locate pid file${ENDC}. Exiting.\n"; 
-					exit;
-				}
+				# revert to a find command as a last ditch effort to find the pid
+				if ($VERBOSE) { print "VERBOSE: Looking for pid file ...\n" }
+                                if ( -d "/var/run/apache2") {
+                                        our $pidguess = `find /var/run/apache2 | grep pid`;
+                                } elsif ( -d "/var/run/httpd") {
+                                        our $pidguess = `find /var/run/httpd | grep pid`;
+                                } else {
+                                        show_crit_box; print "${RED}Unable to locate pid file${ENDC}. Exiting.\n";
+                                        exit;
+                                }
+                                our $pidguess;
+                                chomp($pidguess);
+                                if ( -f $pidguess ) {
+                                        our $pidfile = $pidguess;
+                                        if ($VERBOSE) { print "VERBOSE: Located pidfile at $pidfile.\n" }
+                                } else {
+                                        show_crit_box; print "${RED}Unable to locate pid file${ENDC}. Exiting.\n";
+                                        exit;
+                                }
 			}
 		}
 	
@@ -1672,7 +1789,20 @@ sub preflight_checks {
 		}
 	}
 
+	# Check 13.2
+	# determine the Apache uptime
+	our $parent_pid;
+	our @apache_uptime = get_apache_uptime($parent_pid);
+	
+	if ( ! $NOINFO ) { show_info_box(); print "Apache has been running ${CYAN}$apache_uptime[0]${ENDC}d ${CYAN}$apache_uptime[1]${ENDC}h ${CYAN}$apache_uptime[2]${ENDC}m ${CYAN}$apache_uptime[3]${ENDC}s.\n" }
+	if ( $apache_uptime[0] == "0" ) { 
+		if ( ! $NOWARN ) { 
+			show_crit_box(); print "${RED}*** LOW UPTIME ***${ENDC}.\n"; 
+			show_advisory_box(); print "${YELLOW}The following recommendations may be misleading - apache has been restarted within the last 24 hours.${ENDC}\n";
+		}
+	}
 
+	# check 13.3
 	# figure out how much RAM is in the server
 	our $available_mem = `LANGUAGE=en_GB.UTF-8 free | grep \"Mem:\" | awk \'{ print \$2 }\'` / 1024;
 	$available_mem = floor($available_mem);
@@ -1752,6 +1882,17 @@ sub preflight_checks {
 		if ( ! $NOINFO ) { show_info_box();  print "Your MaxClients setting is ${CYAN}$maxclients${ENDC}.\n" }
 	}
 
+	# Check 16.01
+	# Check if maxclients is more than ServerLimit
+	# Then set maxclients to serverlimit if serverlimit is LESS than MaxClients
+	our $maxclients;
+	our $serverlimit;
+	if ($maxclients > $serverlimit) {
+		$maxclients = $serverlimit;
+		 if ( ! $NOWARN ) { show_warn_box; print "MaxClients directive is higher than ServerLimit, using ServerLimit ($serverlimit) to apply calculations.\n" }
+	}
+
+
 	# Check 16.1
 	# Get current number of running apache processes
 	# This resolves Issue #15: https://github.com/richardforth/apache2buddy/issues/15
@@ -1767,14 +1908,19 @@ sub preflight_checks {
 	# Check 16.2
 	# Get current number of vhosts
 	# This addresses issue #5 'count of vhosts': https://github.com/richardforth/apache2buddy/issues/5 
-	our $vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | grep -c port`;
+	# address https://github.com/richardforth/apache2buddy/issues/239 Plesk vhost counts always out
+	our $vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | egrep -v "lists|default|webmail" | grep -c "[ ]\\{1,\\}port [0-9]\\{1,\\}"`;
 	# split this total into port 80 and 443 vhosts respectively: https://github.com/richardforth/apache2buddy/issues/142
-	our $port80vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | grep -c "port 80 "`;
-	our $port443vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | grep -c "port 443 "`;
+	our $port80vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | egrep -v "lists|default|webmail" | grep -c "port 80 "`;
+	our $port443vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | egrep -v "lists|default|webmail" | grep -c "port 443 "`;
+	our $port7080vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | egrep -v "lists|default|webmail" | grep -c "port 7080 "`;
+	our $port7081vhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | egrep -v "lists|default|webmail" | grep -c "port 7081 "`;
 	# in case apache2ctl not working, try apachectl
 	chomp ($vhost_count);
 	chomp ($port80vhost_count);
 	chomp ($port443vhost_count);
+	chomp ($port7080vhost_count);
+	chomp ($port7081vhost_count);
 	if ( ! $NOINFO ) { show_info_box(); print "Number of vhosts detected: ${CYAN}$vhost_count${ENDC}.\n" }
 	if ($port80vhost_count gt 0 ) {
 		if ( ! $NOINFO ) { show_info_box(); print "            |________ of which ${CYAN}$port80vhost_count${ENDC} are HTTP (specifically, port 80).\n" }
@@ -1782,10 +1928,16 @@ sub preflight_checks {
 	if ($port443vhost_count gt 0 ) {
 		if ( ! $NOINFO ) { show_info_box(); print "            |________ of which ${CYAN}$port443vhost_count${ENDC} are HTTPS (specifically, port 443).\n" }
 	}
+	if ($port7080vhost_count gt 0 ) {
+		if ( ! $NOINFO ) { show_info_box(); print "            |________ of which ${CYAN}$port7080vhost_count${ENDC} are HTTP (specifically, port 7080).\n" }
+	}
+	if ($port7081vhost_count gt 0 ) {
+		if ( ! $NOINFO ) { show_info_box(); print "            |________ of which ${CYAN}$port7081vhost_count${ENDC} are HTTPS (specifically, port 7081).\n" }
+	}
 	our $real_port;
 	if ($real_port) {
-		if ( $real_port != "80") {
-			our $portXvhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | grep -c "port $real_port "`;
+		if ( not( $real_port =~ /^(80|443|7080|7081)$/ )) {
+			our $portXvhost_count = `LANGUAGE=en_GB.UTF-8 $apachectl -S 2>&1 | egrep -v "lists|default|webmail" | grep -c "port $real_port "`;
 			chomp ($portXvhost_count);
 			if ($portXvhost_count gt 0 ) {
 				if ( ! $NOINFO ) { show_info_box(); print "            |________ of which ${CYAN}$portXvhost_count${ENDC} are listening on nonstandard port ${CYAN}$real_port${ENDC}.\n" }
@@ -1794,9 +1946,9 @@ sub preflight_checks {
 	}
 	if ($vhost_count >= $maxclients) {
 		if ( our $apache_version =~ m/.*\s*\/2.4.*/) {
-			if ( ! $NOWARN ) { show_warn_box(); print "Current Apache vHost Count is ${RED}greater than maxrequestworkers${ENDC}.\n" }
+			if ( ! $NOWARN ) { show_advisory_box(); print "${YELLOW}Current Apache vHost Count is greater than maxrequestworkers, which is unusual, but can be valid in some scenarios.${ENDC}\n" }
 		} else {
-			if ( ! $NOWARN ) { show_warn_box(); print "Current Apache vHost Count is ${RED}greater than maxclients${ENDC}.\n" }
+			if ( ! $NOWARN ) { show_advisory_box(); print "${YELLOW}Current Apache vHost Count is greater than maxclients, which is unusual, but can be valid in some scenarios.${ENDC}\n" }
 		}
 	} else {
 		if ( our $apache_version =~ m/.*\s*\/2.4.*/) {
@@ -1823,6 +1975,7 @@ sub preflight_checks {
 	# check #17a-1 detect control panels 
 	detect_plesk_version();
 	detect_cpanel_version();
+	detect_virtualmin_version();
 
 	# Check 17b
 	# Display the php memory limit
@@ -1849,32 +2002,43 @@ sub preflight_checks {
 
 	# Check 19 : Maxclients Hits
 	# This has been abstracted out into a separate subroutine
-	detect_maxclients_hits($model, $process_name);
+	if ( ! $SKIPMAXCLIENTS ) { 
+		detect_maxclients_hits($model, $process_name) 
+	} else {
+		if ( ! $NOINFO ) { show_advisory_box(); print "Skipping Maxclients Hits check.\n" }
+	}
 
 	# Check 20 : PHP Fatal Errors
 	# This has been abstracted out into a separate subroutine
 	# This addresses issue #6 'Check for and report on PHP Fatal Errors in the logs'
-	if ($PHP) {
-		detect_php_fatal_errors($model, $process_name);
+	if ( ! $SKIPPHPFATAL ) {
+		if ($PHP) {
+			detect_php_fatal_errors($model, $process_name);
+		}
+	} else {
+		if ( ! $NOINFO ) { show_advisory_box(); print "Skipping PHP FATAL Errors check.\n" }
 	}
 
 	# Check 21 : Apache updates
-	our $os_name;
-	detect_package_updates($os_name);
+	if ( ! $SKIPUPDATES ) {
+		detect_package_updates() 
+	} else {
+		if ( ! $NOINFO ) { show_advisory_box(); print "Skipping Package Updates check.\n" }
+	}
 }
 
 sub detect_package_updates {
-	my ($os_name) = @_;
+	my ($distro, $version, $codename) = get_os_platform();
 	our $package_update = 0;
-	if ($os_name eq "Ubuntu" or $os_name eq "Debian" ) {
-		$package_update = `apt-get update 2>&1 >/dev/null && dpkg --get-selections | xargs LANGUAGE=en_GB.UTF-8 apt-cache policy {} | grep -1 Installed | sed -r 's/(:|Installed: |Candidate: )//' | uniq -u | tac | sed '/--/I,+1 d' | tac | sed '\$d' | sed -n 1~2p | egrep "^php|^apache2"`;
+	if (ucfirst($distro) eq "Ubuntu" or ucfirst($distro) eq "Debian" ) {
+		$package_update = `apt-get update 2>&1 >/dev/null && dpkg --get-selections | xargs apt-cache policy | grep -1 Installed | sed -r 's/(:|Installed: |Candidate: )//' | uniq -u | tac | sed '/--/I,+1 d' | tac | sed '\$d' | sed -n 1~2p | egrep "^php|^apache2"`;
 	} else {
 		$package_update = `yum check-update | egrep "^httpd|^php"`;
 	}
 	if ($package_update) {
 		if ( ! $NOWARN ) {
-			show_warn_box(); print "${RED}Apache and / or PHP has a pending package update available.${ENDC}\n";
-			print $package_update;
+			show_crit_box(); print "${RED}Apache and / or PHP has a pending package update available.${ENDC}\n";
+			print "${YELLOW}$package_update${ENDC}";
 		}
 	} else {
 		if (-d "/usr/local/httpd" or -d "/usr/local/apache" or -d "/usr/local/apache2") {
@@ -1922,44 +2086,55 @@ sub detect_plesk_version {
 	}
 }
 
+sub detect_virtualmin_version {
+	our $vmin = 0;
+	our $vmin = 1 if -f "/usr/sbin/virtualmin";
+	if ($vmin) {
+		my $vmin_version = 0;
+		$vmin_version = `/usr/sbin/virtualmin info | grep "virtualmin version" | awk -F":" '{ print \$2}'`;
+		chomp($vmin_version);
+		my $wmin_version = 0;
+		$wmin_version = `/usr/sbin/virtualmin info | grep "webmin version" | awk -F":" '{ print \$2}'`;
+		chomp($wmin_version);
+		if ( ! $NOINFO ) { show_info_box(); print "Virtualmin Version: ${CYAN}$vmin_version${ENDC}\n" }
+		if ( ! $NOINFO ) { show_info_box(); print "Webmin Version: ${CYAN}$wmin_version${ENDC}\n" }
+	} else {
+		if ( ! $NOINFO ) { show_info_box(); print "This server is NOT running Virtualmin.\n" }
+	}
+}
 
 sub detect_php_fatal_errors {
-	print "VERBOSE: Checking logs for PHP Fatal Errors, this can take some time..." if $main::VERBOSE;
+	print "VERBOSE: Checking logs for PHP Fatal Errors, this can take some time...\n" if $main::VERBOSE;
 	our $phpfpm_detected;
 	our ($model, $process_name) = @_;
 	if ($model eq "worker") {
 		return;
 	}
-	our $phpfatalerr = 0;
-	our $phpfpmfatalerr_hits = 0;
-	if ($process_name eq "/usr/sbin/httpd") {
-                our $phpfatalerr_hits = `grep -Hi fatal /var/log/httpd/* | grep -i php | grep -i error | tail -5`;
-        } elsif ($process_name eq "/usr/local/apache/bin/httpd") {
-                our $phpfatalerr_hits = `grep -Hi fatal /usr/local/apache/logs/* | grep -i php | grep -i error | tail -5`;
-        } else {
-                our $phpfatalerr_hits = `grep -Hi fatal /var/log/apache2/* | grep -i php | grep -i error | tail -5`;
-        }
-	
-	if ($phpfpm_detected) {
-		our $phpfpmfatalerr_hits = `grep -Hi fatal /var/log/php-fpm/* | grep -i php | grep -i error | tail -5`;
-	}
 
-        our $phpfatalerr_hits;
-        our $phpfpmfatalerr_hits;
-	if ($phpfatalerr_hits or $phpfpmfatalerr_hits) {
-		$phpfatalerr = 1;
+	if ($process_name eq "/usr/sbin/httpd" ) {
+		our $SCANDIR = "/var/log/httpd/";
+        } elsif ($process_name eq "/usr/local/apache/bin/httpd" ) {
+		our $SCANDIR = "/usr/local/apache/logs/";
+        } else {
+		our $SCANDIR = "/var/log/apache2/";
+        }
+	our $SCANDIR;
+	our %logfile_counts;
+	grep_php_fatal($SCANDIR);
+
+	if ($phpfpm_detected) {
+		our $SCANDIR = "/var/log/php-fpm/";
+		our %logfile_counts;
+		grep_php_fatal($SCANDIR);
 	}
-	our $phpfatalerr;
-	if ($phpfatalerr) {
+	our %logfile_counts;
+	if (%logfile_counts) {
 		if ( ! $NOWARN ) {
-			show_warn_box();
-			print "${RED}PHP Fatal errors were found, see the most recent entries below (CHECK THE DATESTAMPS!)${ENDC}\n";
-			show_advisory_box(); print "${YELLOW}Check the logs manually, there may be much more.${ENDC}\n";
-			print "\n${CYAN}Apache Logs (LAST 5 ENTRIES):${ENDC}\n";
-			print $phpfatalerr_hits;
-			if ($phpfpm_detected) {
-				print "\n${CYAN}PHP-FPM Logs (LAST 5 ENTRIES):${ENDC}\n";
-				print $phpfpmfatalerr_hits;
+			show_crit_box();
+			print "${RED}PHP Fatal errors were found, see summaries below.${ENDC}\n";
+			show_advisory_box(); print "${YELLOW}Check the logs manually.${ENDC}\n";
+			while( my( $key, $value ) = each %logfile_counts ){
+				show_advisory_box(); print " - ${YELLOW}$key${ENDC}: ${CYAN}$value${ENDC}\n";
 			}
 			our $plesk;
 			if ($plesk) {
@@ -1978,6 +2153,22 @@ sub detect_php_fatal_errors {
 	}
 }
 
+
+sub grep_php_fatal {
+	my ($SCANDIR) = @_;
+	our %logfile_counts;
+        my @logfile_list;
+	find(sub {push @logfile_list, $File::Find::name  if ( -f $_ ) },  $SCANDIR);
+        foreach my $file (@logfile_list) {
+                our $phpfatalerror_hits = 0;
+                open(FILE, $file);
+                while (<FILE>) {
+                        $phpfatalerror_hits++ if $_ =~ /php fatal/i;
+                }
+                close(FILE);
+                if ($phpfatalerror_hits) {  $logfile_counts{ $file } =  $phpfatalerror_hits }
+        }
+}	
 
 
 sub detect_maxclients_hits {
@@ -2038,17 +2229,20 @@ sub get_service_memory_usage_mbytes {
 
 
 sub detect_additional_services {
+	if ($VERBOSE) { print "VERBOSE: Begin detecting additional services...\n" }
 	our $servicefound_flag = 0; # we need this to give a message  if nothing was found, otherwise it looks silly.
 	# Detect Mysql
 	our $mysql_detected = 0;
 	our $mysql_detected = `ps -C mysqld -o rss | grep -v RSS`;
 	if ( $mysql_detected ) {
+		if ($VERBOSE) { print "VERBOSE: MySQL Detected\n" }
 		our $servicefound_flag = 1;
 		if ( ! $NOINFO ) { show_info_box(); print "${CYAN}MySQL${ENDC} Detected => " } 
 		# Get MySQL Memory Usage
 		our $mysql_memory_usage_mbytes = get_service_memory_usage_mbytes("mysqld");
 		if ( ! $NOINFO ) { print "Using ${CYAN}$mysql_memory_usage_mbytes MB${ENDC} of memory.\n" }
 	} else {
+		if ($VERBOSE) { print "VERBOSE: MySQL NOT Detected\n" }
 		our $mysql_memory_usage_mbytes = 0;
 	}
 	
@@ -2056,11 +2250,13 @@ sub detect_additional_services {
 	our $java_detected = 0;
 	$java_detected = `ps -C java -o rss | grep -v RSS`;
 	if ( $java_detected ) {
+		if ($VERBOSE) { print "VERBOSE: Java Detected\n" }
 		our $servicefound_flag = 1;
 		if ( ! $NOINFO ) { show_info_box(); print "${CYAN}Java${ENDC} Detected => " } 
 		our $java_memory_usage_mbytes = get_service_memory_usage_mbytes("java");
 		if ( ! $NOINFO ) { print "Using ${CYAN}$java_memory_usage_mbytes MB${ENDC} of memory.\n" }
 	} else {
+		if ($VERBOSE) { print "VERBOSE: Java NOT Detected\n" }
 		our $java_memory_usage_mbytes = 0;
 	}
 
@@ -2068,12 +2264,14 @@ sub detect_additional_services {
 	our $varnish_detected = 0;
 	$varnish_detected = `ps -C varnishd -o rss | grep -v RSS`;
 	if ( $varnish_detected ) { 
+		if ($VERBOSE) { print "VERBOSE: Varnish Detected\n" }
 		our $servicefound_flag = 1;
 		if ( ! $NOINFO ) { show_info_box(); print "${CYAN}Varnish${ENDC} Detected => " }
 		# Get varnish Memory Usage
 		our $varnish_memory_usage_mbytes = get_service_memory_usage_mbytes("varnishd");
 		if ( ! $NOINFO ) { print "Using ${CYAN}$varnish_memory_usage_mbytes MB${ENDC} of memory.\n" }
 	} else {
+		if ($VERBOSE) { print "VERBOSE: Varnish NOT Detected\n" }
 		our $varnish_memory_usage_mbytes = 0;
 	}
 
@@ -2081,12 +2279,14 @@ sub detect_additional_services {
 	our $redis_detected = 0;
 	$redis_detected = `ps -C redis-server -o rss | grep -v RSS`;
 	if ( $redis_detected ) { 
+		if ($VERBOSE) { print "VERBOSE: Redis Detected\n" }
 		our $servicefound_flag = 1;
 		if ( ! $NOINFO ) { show_info_box(); print "${CYAN}Redis${ENDC} Detected => " }
 		# Get Redis Memory Usage
 		our $redis_memory_usage_mbytes = get_service_memory_usage_mbytes("redis-server");
 		if ( ! $NOINFO ) { print "Using ${CYAN}$redis_memory_usage_mbytes MB${ENDC} of memory.\n" }
 	} else {
+		if ($VERBOSE) { print "VERBOSE: Redis NOT Detected\n" }
 		our $redis_memory_usage_mbytes = 0;
 	}
 
@@ -2094,12 +2294,14 @@ sub detect_additional_services {
 	our $memcache_detected = 0;
 	$memcache_detected = `ps -C memcached -o rss | grep -v RSS`;
 	if ( $memcache_detected ) { 
+		if ($VERBOSE) { print "VERBOSE: Memcache Detected\n" }
 		our $servicefound_flag = 1;
 		if ( ! $NOINFO ) { show_info_box(); print "${CYAN}Memcache${ENDC} Detected => " }
 		# Get Memcache Memory Usage
 		our $memcache_memory_usage_mbytes = get_service_memory_usage_mbytes("memcached");
 		if ( ! $NOINFO ) { print "Using ${CYAN}$memcache_memory_usage_mbytes MB${ENDC} of memory.\n" }
 	} else {
+		if ($VERBOSE) { print "VERBOSE: Memcache NOT Detected\n" }
 		our $memcache_memory_usage_mbytes = 0;
 	}
 
@@ -2108,6 +2310,7 @@ sub detect_additional_services {
 	# Get PHP-FPM Memory Usage
 	$phpfpm_detected = `ps -C php-fpm -o rss | grep -v RSS` || `ps -C php5-fpm -o rss | grep -v RSS` || 0;
 	if ( $phpfpm_detected ) { 
+		if ($VERBOSE) { print "VERBOSE: PHP-FPM Detected\n" }
 		our $servicefound_flag = 1;
 		# Get PHP-FPM Memory Usage
 		our $phpfpm = 0;
@@ -2124,6 +2327,7 @@ sub detect_additional_services {
 		our $phpfpm_memory_usage_mbytes;
 		if ( ! $NOINFO ) { print "Using ${CYAN}$phpfpm_memory_usage_mbytes MB${ENDC} of memory.\n" }
 	} else {
+		if ($VERBOSE) { print "VERBOSE: PHP-FPM NOT Detected\n" }
 		our $phpfpm_memory_usage_mbytes = 0;
 	}
 
@@ -2131,6 +2335,7 @@ sub detect_additional_services {
 	our $gluster_detected = 0;
 	$gluster_detected = `ps -C glusterd -o rss | grep -v RSS`;
 	if ( $gluster_detected ) { 
+		if ($VERBOSE) { print "VERBOSE: Gluster Detected\n" }
 		our $servicefound_flag = 1;
 		if ( ! $NOINFO ) { show_info_box(); print "${CYAN}Gluster${ENDC} Detected => " }
 		# Get Gluster Memory Usage
@@ -2140,6 +2345,7 @@ sub detect_additional_services {
 		our $gluster_memory_usage_mbytes = $glusterd_memory_usage_mbytes + $glusterfs_memory_usage_mbytes + $glusterfsd_memory_usage_mbytes;
 		if ( ! $NOINFO ) { print "Using ${CYAN}$gluster_memory_usage_mbytes MB${ENDC} of memory.\n" }
 	} else {
+		if ($VERBOSE) { print "VERBOSE: Gluster NOT Detected\n" }
 		our $gluster_memory_usage_mbytes = 0;
 	}
 	if ( $servicefound_flag == 0 ) {
@@ -2147,6 +2353,7 @@ sub detect_additional_services {
 	} else {
 		print "\n"; # add a aseparator before the next section
 	}
+	if ($VERBOSE) { print "VERBOSE: End detecting additional services...\n" }
 }
 
 
@@ -2204,6 +2411,7 @@ our $model;
 our $process_name;
 our $available_mem;
 our $maxclients;
+our $flag_trigger = 0;
 our $threadsperchild;
 our $serverlimit;
 our $mysql_detected;

@@ -2,6 +2,82 @@ CHANGELOG
 
 When		Who		What
 ======================================================================================
+2018-02-10      Richard Forth   Addressed a concern over plesk vhosts counting
+                                now ommiting domains containing:
+				     - lists
+				     - default
+				     - webmail
+				from the count.
+2017-12-05	Richard Forth   Closes #231 Respect ServerLimit.
+2017-11-01	Richard Forth   Closes #229 Removed easter egg, causing problems.
+2017-10-13	Richard Forth   Closes #223 Added an easter egg.
+				To trigger it, set maxclients /
+				maxrequestworkers to 5 or less.
+2017-10-13	Richard Forth   Closes #222 pidfile not found when ecased in quotes.
+2017-10-13	Richard Forth   Added some much needed carriage returns to VERBOSE lines.
+2017-07-14	Richard Forth   Resolved #215, pidfile issue.
+2017-07-08	Richard Forth   Resolved #195, virtualmin/webmin pidfile issue.
+2017-07-08	Richard Forth   Resolved #211, detect virtualmin/webmin install.
+				Note: only displays webmin version in virtualmin
+				installs. 
+2017-07-08	Richard Forth   Resolved #209, Yet more ubuntu madness...
+				No /etc/php/7.0/apache2 folder, this is
+				/etc/php/7.0/fpm. Added logic to include this.
+2017-07-08	Richard Forth   Resolved #207, Hard Fail in OS is not listed
+				as supported.
+2017-07-08	Richard Forth   Resolved #206, Drop support for debian 7
+				Issues with perl modules out of the box.
+2017-07-08	Richard Forth   Resolved #205 at least on Debian 9
+				debian update check broken, requires python
+				Addded a new preflight check to check for a
+				python binary.
+				Also adjusted the way to check what OS we are
+				running as debian 9 now reports its distro in
+				all lowercase.
+2017-07-08	Richard Forth   Resolved #197 at least on Debian 9
+				debian php.ini using cli not apache
+				committed to staging for further testing
+2017-07-08	Richard Forth   Closes #204, Debian 9 pidfile not found error.
+2017-07-07	Richard Forth   Closes #201, a serious bug that invoked OOMKILLER when
+				scanning very large log files.
+2017-06-13	Richard Forth   Fixed uptime logic problem.
+2017-06-13	Richard Forth   Added more verbosity.
+2017-04-27	Richard Forth   Added more verbosity, fixed some typos.
+2017-04-20	Richard Forth   Closes #184 , Modified PHP Fatal Error Check.
+				- Now works on subfolders correctly
+				- removes need for backticked grep
+				- cleaner and more structured summaries rather
+				than actual log output.
+2017-04-20	Richard Forth   Closes #183 , Added skip checks for the following:
+				--skip-maxclients
+				--skip-php-fatal
+				--skip-updates
+				See --help for more information.
+2017-04-04	Richard Forth   Added 'Red Hat Enterprise Linux Server' to new
+				list of supported OSes. Fixes #179. Bug. 
+2017-04-02	Richard Forth   Added code to detect older EOL OS versions and abort.
+				Still in soft-fail at the moment.
+2017-04-02	Richard Forth   Added code to detect EOL OS versions and abort.
+				Still in soft-fail at the moment.
+2017-04-02 	Richard Forth   Laid foundations for new OS detection using
+				some embedded python, this actually reduces
+				required code base by over 100 lines of code,
+				missing OS verification checks now but will
+				fix this in next update.
+2017-03-28 	Richard Forth   Small bug fix.
+2017-03-25 	Richard Forth   Improved regex around the vhost count, specifically
+				when looking for "port" it was capturing 
+				aliases etc that has the word port as part of it, like
+				support.mydomain.com, the regex should filter out what
+				we dont want to see and only give us a true count of
+				vhosts. Closes #160.
+2017-03-25 	Richard Forth   Downgraded some warnings to advisory messages.
+				Specifically where vhost count is greater than
+				MaxClients / MaxRequestWorkers, also changed
+				the wording slightly.
+2017-03-25 	Richard Forth   Added a key to the usage() output, see --help
+2017-03-25 	Richard Forth   Fixed some warnings and advisory messages not
+				being hidden when using --nowarn or --report oprtions.
 2017-03-25 	Richard Forth   Made the commands I think that are likely to
 				fail due to different locale settings run in 
 				en_GB.UTF-8 which doesnt affect system locale
