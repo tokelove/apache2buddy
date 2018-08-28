@@ -128,6 +128,7 @@ If no options are specified, the basic tests will be run.
 
 	-h, --help		Print this help message
 	-p, --port=PORT		Specify an alternate port to check (default: 80)
+	    --pid=PID		Specify a PID to bypass the "Multiple PIDS listening on port 80" error.
 	-v, --verbose		Use verbose output (this is very noisy, only useful for debugging)
 	-n, --nocolor		Use default terminal color, dont try to be all fancy! 
 	-H, --noheader		Do not show header title bar.
@@ -166,6 +167,9 @@ my $LIGHTBG = 0;
 
 # if no port is specified, we default to 80
 my $port = 80;
+
+# if no pid is specified, we default to 0
+our $pid = 0;
 
 # by default, do not use verbose output
 our $VERBOSE = "";
@@ -210,6 +214,7 @@ our $SKIPUPDATES = 0;
 GetOptions(
 	'help|h' => \$help,
 	'port|p:i' => \$port,
+	'pid:i' => \$pid,
 	'verbose|v' => \$VERBOSE,
 	'nocolor|n' => \$main::NOCOLOR,
 	'noinfo|N' => \$NOINFO,
@@ -292,7 +297,8 @@ if ( ! $NOCOLOR ) {
 }
 
 sub get_os_platform_older {
-	my $raw_platform = `python -c 'import platform ; print (platform.dist())'`;
+	our $python;
+	my $raw_platform = `$python -c 'import platform ; print (platform.dist())'`;
 	# ('CentOS Linux', '7.3.1611', 'Core')
 	$raw_platform =~ s/[()']//g;
 	my @platform = split(", ", $raw_platform);
@@ -303,7 +309,8 @@ sub get_os_platform_older {
 }
 
 sub get_os_platform {
-	my $raw_platform = `python -c 'import platform ; print (platform.linux_distribution())'`;
+	our $python;
+	my $raw_platform = `$python -c 'import platform ; print (platform.linux_distribution())'`;
 	# ('CentOS Linux', '7.3.1611', 'Core')
 	$raw_platform =~ s/[()']//g;
 	my @platform = split(", ", $raw_platform);
@@ -344,7 +351,7 @@ sub check_os_support {
 	my %dsv = map { $_ => 1 } @debian_supported_versions;
 
 	# https://www.ubuntu.com/info/release-end-of-life
-	my @ubuntu_supported_versions = ('14.04','16.04');
+	my @ubuntu_supported_versions = ('14.04','16.04','18.04');
 	my %usv = map { $_ => 1 } @ubuntu_supported_versions;
 
 	if (exists($sol{$distro})) {
@@ -1119,6 +1126,10 @@ sub get_php_setting {
 		# try to find the apache2 one
 		if ( -f "/etc/php/7.0/apache2/php.ini") {
 			our $real_config = "/etc/php/7.0/apache2/php.ini";
+		} elsif ( -f "/etc/php/7.1/apache2/php.ini") {
+                        our $real_config = "/etc/php/7.1/apache2/php.ini";
+                } elsif ( -f "/etc/php/7.2/apache2/php.ini") {
+                        our $real_config = "/etc/php/7.2/apache2/php.ini";
 		} elsif ( -f "/etc/php5/apache2/php.ini" ) {
 			our $real_config = "/etc/php5/apache2/php.ini";
 		} elsif ( -f "/etc/php/7.0/fpm/php.ini") {
@@ -1499,9 +1510,20 @@ sub preflight_checks {
 
 	if ( $python !~ m/.*\/python/ ) {
 		show_crit_box(); 
-		print "Unable to locate the python binary. This script requires python to determine the Operating and Version.\n";
-		show_info_box(); print "${YELLOW}To fix this make sure the python package is installed.${ENDC}\n";
-		exit;
+		print "Unable to locate the python binary.\n";
+                print "Trying for python3...\n";
+                our $python = `which python3`;
+                chomp($python);
+
+
+                if ( $python !~ m/.*\/python3/ ) {
+                        show_crit_box();
+                        print "Unable to locate the python3 binary. This script requires python to determine the Operating and Version.\n";
+                        show_info_box(); print "${YELLOW}To fix this make sure the python or python3 package is installed.${ENDC}\n";
+                        exit;
+                } else {
+                        if ( ! $NOOK ) { show_ok_box(); print "The 'python' binary exists and is available for use: ${CYAN}$python${ENDC}\n" }
+                }
 	} else {
 		if ( ! $NOOK ) { show_ok_box(); print "The 'python' binary exists and is available for use: ${CYAN}$python${ENDC}\n" }
 	}
@@ -1565,7 +1587,10 @@ sub preflight_checks {
 	# specified port
 	if ( ! $NOINFO ) { show_info_box(); print "We are checking the service running on port ${CYAN}$port${ENDC}...\n" }
 
-	our $pid = get_pid($port);
+	our $pid;
+	if (! $pid ) {  
+		our $pid = get_pid($port);
+	}
 	
 	print "VERBOSE: PID is ".$pid."\n" if $VERBOSE;
 	
