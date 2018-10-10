@@ -333,6 +333,7 @@ sub check_os_support {
 				'redhat',
 				'CentOS Linux',
 				'CentOS',
+				'CloudLinux',
 				'centos',
 				'Scientific Linux');
 	my %sol = map { $_ => 1 } @supported_os_list;
